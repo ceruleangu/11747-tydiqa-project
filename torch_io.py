@@ -7,7 +7,7 @@ import tensorflow.compat.v1 as tf
 from torch.utils.data import Dataset
 import torch
 import data
-import preproc
+import preprocess
 import tokenization
 
 #define dataset for tydi
@@ -89,7 +89,7 @@ class CreateTorchExampleFn(object):
         debug_info["tydi_example"] = tydi_example
 
         # Converts `TyDiExample`s into `InputFeatures` and sends them to `output_fn
-        input_features = preproc.convert_single_example(
+        input_features = preprocess.convert_single_example(
             tydi_example,
             tokenizer=self.tokenizer,
             is_training=self.is_training,
@@ -131,7 +131,7 @@ class CreateTorchExampleFn(object):
 
     #this function convert feature_lst to dataset and return
     def convert_feature_to_dataset(self):
-        self.datset = TyDiDataset(self.feature_lst, is_training=self.is_training)
+        self.dataset = TyDiDataset(self.feature_lst, is_training=self.is_training)
 
         return self.dataset
 

@@ -6,8 +6,8 @@ from absl import logging
 from bert import modeling as bert_modeling
 import tensorflow.compat.v1 as tf
 import postproc
-import preproc
-import tf_io
+import preprocess
+import torch_io
 import tydi_modeling
 
 import torch
@@ -27,7 +27,7 @@ parser.add_argument()
 parser.add_argument(
     "bert_config_file", default=None,
     help="The config json file corresponding to the pre-trained BERT model. "
-    "This specifies the model architecture.")
+         "This specifies the model architecture.")
 
 parser.add_argument(
     "vocab_file", default=None,
@@ -44,9 +44,9 @@ parser.add_argument(
 parser.add_argument(
     "record_count_file", default=None,
     help="File containing number of precomputed training records "
-    "(in terms of 'features', meaning slices of articles). "
-    "This is used for computing how many steps to take in "
-    "each fine tuning epoch.")
+         "(in terms of 'features', meaning slices of articles). "
+         "This is used for computing how many steps to take in "
+         "each fine tuning epoch.")
 
 parser.add_argument(
     "candidate_beam", default=30,
@@ -55,17 +55,17 @@ parser.add_argument(
 parser.add_argument(
     "predict_file", default=None,
     help="TyDi json for predictions. E.g., dev-v1.1.jsonl.gz or test-v1.1.jsonl.gz. "
-    "Used only for `--do_predict`.")
+         "Used only for `--do_predict`.")
 
 parser.add_argument(
     "precomputed_predict_file", default=None,
     help="TyDi tf.Example records for predictions, created separately by "
-    "`prepare_tydi_data.py` Used only for `--do_predict`.")
+         "`prepare_tydi_data.py` Used only for `--do_predict`.")
 
 parser.add_argument(
     "output_prediction_file", default=None,
     help="Where to print predictions in TyDi prediction format, to be passed to"
-    "tydi_eval.py.")
+         "tydi_eval.py.")
 
 parser.add_argument(
     "init_checkpoint", default=None,
@@ -74,13 +74,13 @@ parser.add_argument(
 parser.add_argument(
     "max_seq_length", default=512,
     help="The maximum total input sequence length after WordPiece tokenization. "
-    "Sequences longer than this will be truncated, and sequences shorter "
-    "than this will be padded.")
+         "Sequences longer than this will be truncated, and sequences shorter "
+         "than this will be padded.")
 
 parser.add_argument(
     "doc_stride", default=128,
     help="When splitting up a long document into chunks, how much stride to "
-    "take between chunks.")
+         "take between chunks.")
 
 parser.add_argument(
     "max_question_length", 64,
@@ -94,7 +94,7 @@ parser.add_argument("do_predict", False, "Whether to run prediction.")
 parser.add_argument("train_batch_size", 16, "Total batch size for training.")
 
 parser.add_argument("predict_batch_size", 8,
-                     "Total batch size for predictions.")
+                    "Total batch size for predictions.")
 
 parser.add_argument(
     "predict_file_shard_size", 1000,
@@ -104,7 +104,7 @@ parser.add_argument(
 parser.add_argument("learning_rate", 5e-5, "The initial learning rate for Adam.")
 
 parser.add_argument("num_train_epochs", 3.0,
-                   "Total number of training epochs to perform.")
+                    "Total number of training epochs to perform.")
 
 parser.add_argument(
     "warmup_proportion", 0.1,
@@ -112,10 +112,10 @@ parser.add_argument(
     "E.g., 0.1 = 10% of training.")
 
 parser.add_argument("save_checkpoints_steps", 1000,
-                     "How often to save the model checkpoint.")
+                    "How often to save the model checkpoint.")
 
 parser.add_argument("iterations_per_loop", 1000,
-                     "How many steps to make in each estimator call.")
+                    "How many steps to make in each estimator call.")
 
 parser.add_argument(
     "max_answer_length", 30,
@@ -133,10 +133,10 @@ parser.add_argument(
 
 parser.add_argument(
     "max_passages", 45, "Maximum number of passages to consider for a "
-    "single article. If an article contains more than"
-    "this, they will be discarded during training. "
-    "BERT's WordPiece vocabulary must be modified to include "
-    "these within the [unused*] vocab IDs.")
+                        "single article. If an article contains more than"
+                        "this, they will be discarded during training. "
+                        "BERT's WordPiece vocabulary must be modified to include "
+                        "these within the [unused*] vocab IDs.")
 
 parser.add_argument(
     "max_position", 45,
@@ -148,31 +148,30 @@ parser.add_argument(
     "If false, just print a warning and skip it.")
 
 parser.add_argument(
-    "adam_epsilon", default = 1e-8,
-    help = "weight decaying rate for adam optimizer"
+    "adam_epsilon", default=1e-8,
+    help="weight decaying rate for adam optimizer"
 )
 
 parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
+    "--gradient_accumulation_steps",
+    type=int,
+    default=1,
+    help="Number of updates steps to accumulate before performing a backward/update pass.",
+)
 
 parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
 parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps.")
 parser.add_argument("--logging_steps", type=int, default=500, help="Log every X updates steps.")
 
-
-
 args = parser.parse_args()
 
+
 def train(args, train_dataset, dev_dataset, model, tokenizer):
-    #use tensorboard to keep track of training process
+    # use tensorboard to keep track of training process
     tb_writer = SummaryWriter()
 
     train_sampler = RandomSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler = train_sampler, batch_size = args.train_batch_size)
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
@@ -193,20 +192,18 @@ def train(args, train_dataset, dev_dataset, model, tokenizer):
     tr_loss, logging_loss = 0.0, 0.0
     global_step = 0
     for epoch in tqdm.trange(args.num_train_epochs):
-        epoch_iterator = tqdm(train_dataloader, desc = "Iteration")
+        epoch_iterator = tqdm(train_dataloader, desc="Iteration")
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch.to(DEVICE)
 
-
-
             outputs = model(
-                input_ids = batch["input_ids"],
-                attention_mask = batch['attention_mask'],
-                token_type_ids = batch['token_type_ids'],
-                start_positions = batch["start_positions"],
-                end_positions = batch["end_positions"],
-                answer_types = batch["answer_types"]
+                input_ids=batch["input_ids"],
+                attention_mask=batch['attention_mask'],
+                token_type_ids=batch['token_type_ids'],
+                start_positions=batch["start_positions"],
+                end_positions=batch["end_positions"],
+                answer_types=batch["answer_types"]
             )
 
             loss = outputs[0]
@@ -217,15 +214,17 @@ def train(args, train_dataset, dev_dataset, model, tokenizer):
             model.zero_grad()
             global_step += 1
 
-            #loggin points
+            # loggin points
             if global_step % args.logging_steps == 0:
+
+                # todo: evaluate does not have returns
                 results = evaluate(args, dev_dataset, model, tokenizer)
                 for key, value in results.items():
                     tb_writer.add_scalar("eval_{}".format(key), value, global_step)
                 tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
                 logging_loss = tr_loss
 
-            #save checkpoint
+            # save checkpoint
             if global_step % args.save_steps == 0:
                 output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
                 if not os.path.exists(output_dir):
@@ -243,9 +242,9 @@ def train(args, train_dataset, dev_dataset, model, tokenizer):
 
     return global_step, tr_loss / global_step
 
-def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False):
 
-     # Load data features from cache or dataset file
+def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False):
+    # Load data features from cache or dataset file
     input_dir = args.data_dir if args.data_dir else "."
     cached_features_file = os.path.join(
         input_dir,
@@ -268,9 +267,9 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
     else:
         logging.info("Creating features from dataset file at %s", input_dir)
 
-        #Replace this with processor we defined for this specific task
-        #Look at source code here at: https://github.com/huggingface/transformers/blob/cf72
-        #479bf11bf7fbc499a518896dfd3cafdd0b21/src/transformers/data/processors/squad.py#L566
+        # Replace this with processor we defined for this specific task
+        # Look at source code here at: https://github.com/huggingface/transformers/blob/cf72
+        # 479bf11bf7fbc499a518896dfd3cafdd0b21/src/transformers/data/processors/squad.py#L566
 
         processor = SquadV2Processor()
         if evaluate:
@@ -292,20 +291,20 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
         logging.info("Saving features into cached file %s", cached_features_file)
         torch.save({"features": features, "dataset": dataset, "examples": examples}, cached_features_file)
 
-
     if output_examples:
         return dataset, examples, features
     return dataset
 
+
 def evaluate(args, model, tokenizer):
     dataset, examples, features = load_and_cache_examples(args, tokenizer, evaluate=True, output_examples=True)
 
-    eval_sampler = SequentialSampler(dev_dataset)
-    eval_dataloader = DataLoader(dev_dataset, sampler = eval_sampler, batch_size = args.predict_batch_size)
+    eval_sampler = SequentialSampler(dataset)
+    eval_dataloader = DataLoader(dataset, sampler=eval_sampler, batch_size=args.predict_batch_size)
 
     # Eval!
     logging.info("***** Running evaluation*****")
-    logging.info("  Num examples = %d", len(dev_dataset))
+    logging.info("  Num examples = %d", len(dataset))
     logging.info("  Batch size = %d", args.predict_batch_size)
 
     all_results = []
@@ -321,24 +320,32 @@ def evaluate(args, model, tokenizer):
                 attention_mask=batch['attention_mask'],
                 token_type_ids=batch['token_type_ids']
             )
-
+            # todo ??
+            all_results.append(outputs)
             unique_ids = batch["unique_ids"]
 
-        #precomputed_predict_file is produced and cached by preproc
+        # precomputed_predict_file is produced and cached by preprocess
         if not args.precomputed_predict_file:
-            predict_examples_iter = preproc.read_tydi_examples(
+            predict_examples_iter = preprocess.read_tydi_examples(
                 input_file=args.predict_file,
                 is_training=False,
                 max_passages=args.max_passages,
                 max_position=args.max_position,
                 fail_on_invalid=args.fail_on_invalid,
-                open_fn=tf_io.gopen)
+                # open_fn=torch_io.gopen
+            )
+
+    return all_results
+
 
 def predict():
     pass
+
 
 def main():
     logging.set_verbosity(logging.INFO)
     bert_config = BertConfig.from_json_file(args.bert_config_file)
 
 
+if __name__ == "__main__":
+    main()

@@ -1,14 +1,13 @@
 # Converts an TyDi dataset file to PyTorch Dataloader
 
-
-
 import argparse
 from absl import logging
 import glob
 import gzip
 import json
 import torch_io
-
+import preprocess
+import collections
 
 
 parser = argparse.ArgumentParser(description='Arguments for prepare tydi data.')
@@ -70,7 +69,7 @@ def read_entries(input_jsonl):
       # s = in_file.read()
       for line_num, line in enumerate(in_file):
         json_obj = json.loads(line, object_pairs_hook=collections.OrderedDict)
-        entry = preproc.create_entry_from_json(json_obj)
+        entry = preprocess.create_entry_from_json(json_obj)
 
         if not entry:
           logging.info("Invalid Example %d", json_obj["example_id"])
@@ -99,7 +98,7 @@ def main():
 
     data_processed += 1
     if data_processed % 10 == 0:
-      logging.info("Examples processed: %d", examples_processed)
+      logging.info("Examples processed: %d", data_processed)
     
   creator_fn.convert_feature_to_dataset()
   creator_fn.write_feature_to_file(args.output_torch_data)
