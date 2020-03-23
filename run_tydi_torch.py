@@ -308,7 +308,7 @@ def evaluate(args, model, tokenizer):
     logging.info("  Batch size = %d", args.predict_batch_size)
 
     all_results = []
-
+    result_dict = {} # todo fill in
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
         model.eval()
         batch.to(DEVICE)
@@ -335,7 +335,7 @@ def evaluate(args, model, tokenizer):
                 # open_fn=torch_io.gopen
             )
 
-    return all_results
+    return result_dict
 
 
 def predict():
