@@ -12,7 +12,7 @@ import glob
 import json
 import random
 
-from absl import logging
+import logging
 import data
 import tokenization
 

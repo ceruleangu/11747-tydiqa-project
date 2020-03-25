@@ -83,6 +83,7 @@ def read_entries(input_jsonl):
 def main():
     args = parser.parse_args()
     if not os.path.exists(args.output_torch_data):
+        print("creating new directory for output:", args.output_torch_data)
         os.mkdir(args.output_torch_data)
 
     data_processed = 0
