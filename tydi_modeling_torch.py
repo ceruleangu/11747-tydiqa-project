@@ -19,7 +19,6 @@ This module is a fairly thin wrapper over the BERT reference implementation.
 
 import collections
 
-from absl import logging
 from bert import modeling as bert_modeling
 from bert import optimization as bert_optimization
 import data

@@ -2,18 +2,18 @@ import collections
 import gzip
 import os
 
-from absl import logging
-import tensorflow.compat.v1 as tf
 from torch.utils.data import Dataset
 import torch
 import data
 import preprocess
 import tokenization
 
-#define dataset for tydi
+
+# define dataset for tydi
 class TyDiDataset(Dataset):
     """dataset_features should be a  list of dictionaries"""
-    def __init__(self, dataset_features, is_training = True):
+
+    def __init__(self, dataset_features, is_training=True):
         self.features = dataset_features
         self.is_training = is_training
 
@@ -59,6 +59,7 @@ class CreateTorchExampleFn(object):
 
     def __init__(self, is_training, max_question_length, max_seq_length,
                  doc_stride, include_unknowns, vocab_file):
+        self.feature_lst = []
         self.is_training = is_training
         self.tokenizer = tokenization.TyDiTokenizer(vocab_file=vocab_file)
         self.max_question_length = max_question_length
@@ -99,9 +100,7 @@ class CreateTorchExampleFn(object):
             include_unknowns=self.include_unknowns,
             errors=errors,
             debug_info=debug_info)
-
         # convert example to features
-        self.feature_lst = []
         for input_feature in input_features:
             input_feature.example_index = int(entry["id"])
             input_feature.unique_id = (
@@ -127,14 +126,11 @@ class CreateTorchExampleFn(object):
 
         return self.feature_lst
 
-
-
-    #this function convert feature_lst to dataset and return
+    # this function convert feature_lst to dataset and return
     def convert_feature_to_dataset(self):
         self.dataset = TyDiDataset(self.feature_lst, is_training=self.is_training)
 
         return self.dataset
-
 
     def write_feature_to_file(self, data_dir):
         input_dir = data_dir if data_dir else "."

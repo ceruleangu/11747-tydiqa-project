@@ -13,18 +13,20 @@ import argparse
 
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument('preserve_unused_tokens',default='False',action='store_true',\
-                    help='If True, Wordpiece tokenization will not be applied to words in the vocab.')
-args = parser.parse_args()
+# parser = argparse.ArgumentParser()
+# parser.add_argument('preserve_unused_tokens',default='False',action='store_true',\
+#                     help='If True, Wordpiece tokenization will not be applied to words in the vocab.')
+# args = parser.parse_args()
 
 _UNUSED_TOKEN_RE = re.compile("^\\[unused\\d+\\]$")
 
+preserve_unused_tokens = False
 
 def preserve_token(token, vocab):
+
   if token not in vocab:
     return False
-  if not args.preserve_unused_tokens:
+  if not preserve_unused_tokens:
     return False
   preserved_YN = False
   if _UNUSED_TOKEN_RE.search(token):

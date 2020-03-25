@@ -2,7 +2,7 @@ import collections
 import json
 import os
 
-from absl import logging
+import logging
 from bert import modeling as bert_modeling
 import tensorflow.compat.v1 as tf
 import postproc
