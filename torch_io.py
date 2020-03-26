@@ -18,10 +18,10 @@ class TyDiDataset(Dataset):
         self.is_training = is_training
 
     def __getitem__(self, index):
-        single_feature = self.feautres[index]
+        single_feature = self.features[index]
         unique_ids_tensors = torch.LongTensor(single_feature['unique_ids'])
         example_index_tensors = torch.LongTensor(single_feature['example_index'])
-        input_ids_tensors = torch.LongTensor(single_feature['inputs_ids'])
+        input_ids_tensors = torch.LongTensor(single_feature['input_ids'])
         input_mask_tensors = torch.LongTensor(single_feature['input_mask'])
         segment_id_tensors = torch.LongTensor(single_feature['segment_ids'])
         language_id_tensors = torch.LongTensor(single_feature['language_id'])

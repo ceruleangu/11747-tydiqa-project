@@ -1,27 +1,6 @@
-# coding=utf-8
-# Copyright 2020 The Google Research Team Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Primary NN compute graph implemented in TensorFlow.
-
-This module is a fairly thin wrapper over the BERT reference implementation.
-"""
-
 import collections
 
-from bert import modeling as bert_modeling
-from bert import optimization as bert_optimization
-import data
+from absl import logging
 
 from transformers import BertPreTrainedModel, BertModel
 import torch
@@ -30,8 +9,8 @@ from torch.nn import CrossEntropyLoss, MSELoss
 import torch.nn.functional as F
 
 
-def TYDIQA(BertPreTrainedModel):
-    "Create a QA moddl for tydi taks"
+class TYDIQA(BertPreTrainedModel):
+    "Create a QA model for tydi taks"
 
     def __init__(self, bert_config):
         super(BertPreTrainedModel, self).__init__(bert_config)
@@ -40,11 +19,12 @@ def TYDIQA(BertPreTrainedModel):
         self.bert = BertModel(bert_config)
 
         self.qa_outputs = nn.Linear(bert_config.hidden_size, 2) #we need to label start and end position
-        self.answer_type_output_dense = nn.Linear(self.bert.pooler_output.size[-1].value, self.num_answer_types)
-
+        self.answer_type_output_dense = nn.Linear(bert_config.hidden_size, self.num_answer_types)
+        #self.is_training = is_training
         self.init_weights()
 
     def forward(self,
+                is_training = None,
                 input_ids = None,
                 attention_mask = None,
                 token_type_ids = None,
@@ -72,7 +52,7 @@ def TYDIQA(BertPreTrainedModel):
         end_logits = end_logits.squeeze(-1)
 
         # Get the logits for the answer type prediction.
-        answer_type_output_layer = self.bert.pooler_output
+        answer_type_output_layer = outputs[1]
         answer_type_logits = self.answer_type_output_dense(answer_type_output_layer)
 
         #get sequence length
@@ -95,15 +75,15 @@ def TYDIQA(BertPreTrainedModel):
             loss = -torch.mean(torch.sum(one_hot_positions * log_probs, dim=-1))
             return loss
 
-        start_loss = compute_loss(start_logits, start_positions)
-        end_loss = compute_loss(end_logits, end_positions)
+        if is_training:
+            start_loss = compute_loss(start_logits, start_positions)
+            end_loss = compute_loss(end_logits, end_positions)
 
-        answer_type_loss = compute_label_loss(answer_type_logits, answer_types)
+            answer_type_loss = compute_label_loss(answer_type_logits, answer_types)
 
-        total_loss = (start_loss + end_loss + answer_type_loss) / 3.0
+            total_loss = (start_loss + end_loss + answer_type_loss) / 3.0
 
-        return start_logits, end_logits, answer_type_logits, total_loss
+            return start_logits, end_logits, answer_type_logits, total_loss
 
-
-
-
+        else:
+            return start_logits, end_logits, answer_type_logits
