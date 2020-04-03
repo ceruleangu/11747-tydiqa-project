@@ -76,14 +76,34 @@ class TYDIQA(BertPreTrainedModel):
             return loss
 
         if is_training:
-            start_loss = compute_loss(start_logits, start_positions)
-            end_loss = compute_loss(end_logits, end_positions)
+            #Sometimes positions are outside model inputs, ignore these terms
+            #print("start_loss_one_hot", compute_loss(start_logits,start_positions))
+            #print("end_loss_one_hot",compute_loss(end_logits,end_positions))
+            #print("answer_type_one_hot", compute_label_loss(answer_type_logits, answer_types))
+            #print(start_positions, 'start')
+            #print(end_positions, 'end')
+            start_positions = start_positions.squeeze(-1)
+            end_positions = end_positions.squeeze(-1)
+            answer_types = answer_types.squeeze(-1)
+            #start_positions.clamp_(0, ignored_index)
+            #end_positions.clamp_(0, ignored_index)
+            #answer_types.clamp_(0, self.num_answer_types)
 
-            answer_type_loss = compute_label_loss(answer_type_logits, answer_types)
+            loss_fct_1 = CrossEntropyLoss()
+            loss_fct_2 = CrossEntropyLoss()
+
+            start_loss = loss_fct_1(start_logits, start_positions)
+            end_loss = loss_fct_1(end_logits, end_positions)
+            answer_type_loss = loss_fct_2(answer_type_logits, answer_types)
+            #print("start_loss_cross", start_loss)
+            #print("end_loss_corss", end_loss)
+            #print("answer_type_loss", answer_type_loss)
 
             total_loss = (start_loss + end_loss + answer_type_loss) / 3.0
 
-            return start_logits, end_logits, answer_type_logits, total_loss
+            return start_logits, end_logits, answer_type_logits, (compute_loss(start_logits,start_positions)\
+            +compute_loss(end_logits,end_positions)+compute_label_loss(answer_type_logits, answer_types))/3
+            #total_loss
 
         else:
             return start_logits, end_logits, answer_type_logits

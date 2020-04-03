@@ -1,13 +1,22 @@
 #Run this command to start training
 
 '''python run_tydi_torch.py --vocab_file=mbert_modified_vocab.txt \
-                                      --init_checkpoint='bert-base-multilingual-cased' \
-                                      --train_records_file=preprocessed_data/cached_train \
-                                      --do_train=True \
-                                      --output_dir = ~/tydiqa_baseline_model'''
+                                     --init_checkpoint='bert-base-multilingual-cased' \
+                                     --train_records_file=preprocessed_data/cached_train \
+                                    --do_train=True \
+                                               --output_dir ='tydiqa_baseline_model'''
 
+'''python3 run_tydi_torch.py \
+  --vocab_file='mbert_modified_vocab.txt' \
+  --pretrained_weights='=tydiqa_baseline_model/checkpoint-317433' \
+  --predict_file='tydiqa-v1.0-dev.jsonl.gz' \
+  --precomputed_predict_file='dev_shards/*.tfrecord' \
+  --do_predict=True\
+  --do_train=False\
+  --output_dir='~/tydiqa_baseline_model/predict' \
+  --output_prediction_file='~/tydiqa_baseline_model/predict/pred3.jsonl'''
 
-
+import gzip
 import collections
 import json
 import os
@@ -18,13 +27,12 @@ import postproc
 from tydi_modeling_torch import TYDIQA
 import torch
 import argparse
-from transformers import BertConfig, AdamW, get_linear_schedule_with_warmup, squad_convert_examples_to_features
+from transformers import BertConfig, AdamW, get_linear_schedule_with_warmup
 #from tydi_modeling_torch import TYDIQA
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 import tqdm
 from tfrecord.torch.dataset import TFRecordDataset
 
-from transformers.data.processors.squad import SquadResult, SquadV1Processor, SquadV2Processor
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -32,7 +40,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 def train(args, train_dataset, model):
     # use tensorboard to keep track of training process
-    tb_writer = SummaryWriter()
+    tb_writer = SummaryWriter('loss')
 
     #train_sampler = RandomSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle = True)
@@ -46,6 +54,10 @@ def train(args, train_dataset, model):
         {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=len(train_dataloader)
+        * args.num_train_epochs
+    )
 
     # Train!
     logging.info("***** Running training *****")
@@ -71,32 +83,42 @@ def train(args, train_dataset, model):
             )
 
             loss = outputs[-1]
+            if args.grad_acc_steps > 1:
+                loss = loss / args.grad_acc_steps
 
             loss.backward()
             tr_loss += loss.item()
-            optimizer.step()
-            model.zero_grad()
-            global_step += 1
+            if (step + 1) % args.grad_acc_steps == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                optimizer.step()
+                scheduler.step()
+                model.zero_grad()
+                global_step += 1
 
+                if global_step % args.logging_steps == 0:
+                    tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
+                    print('loss', (tr_loss - logging_loss) / args.logging_steps)
+                    logging_loss = tr_loss
+            #empty cahce
+            del batch
+            torch.cuda.empty_cache()
             #loggin points
-            if global_step % args.logging_steps == 0:
-                tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
-                logging_loss = tr_loss
 
-            # save checkpoint
-            if global_step % args.save_steps == 0:
-                output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
-                if not os.path.exists(output_dir):
-                    os.makedirs(output_dir)
-                    # Take care of distributed/parallel training
-                model_to_save = model.module if hasattr(model, "module") else model
-                model_to_save.save_pretrained(output_dir)
 
-                torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                logging.info("Saving model checkpoint to %s", output_dir)
+        # save checkpoint
+        #if global_step % args.save_steps == 0:
+        output_dir = os.path.join(args.output_dir, "checkpoint-3{}".format(global_step))
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+            # Take care of distributed/parallel training
+        model_to_save = model.module if hasattr(model, "module") else model
+        model_to_save.save_pretrained(output_dir)
 
-                torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
-                logging.info("Saving optimizer and scheduler states to %s", output_dir)
+        torch.save(args, os.path.join(output_dir, "training_args.bin"))
+        logging.info("Saving model checkpoint to %s", output_dir)
+
+                #torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+                #logging.info("Saving optimizer and scheduler states to %s", output_dir)
 
     return global_step, tr_loss / global_step
 
@@ -121,65 +143,97 @@ def read_candidates(input_pattern):
     final_dict.update(postproc.read_candidates_from_one_split(file_obj))
   return final_dict
 
-#def read_
 def predict(args, model):
-
-    eval_dataset = TFRecordDataset(args.computed_predicted_file, index=None)
-    eval_dataloader = DataLoader(eval_dataset, batch_size=args.predict_batch_size, shuffle=False)
-
-
+    tf.gfile.MakeDirs(args.output_dir)
+    #read prediction candidates from entire prediction input jsonl.gz file
+    candidates_dict = read_candidates(args.predict_file)
     #Prediction!
     logging.info("start predicting!")
+
+    #define following routines to call
     full_tydi_pred_dict = {}
-    for batch in eval_dataloader:
+    total_num_examples = 0
+    shards_iter = enumerate(
+        ((f, 0, 0) for f in sorted(tf.gfile.Glob(args.precomputed_predict_file))), 1)
+
+    #Iterating through different shards to get results as we want
+    for shard_num, (shard_filename, shard_num_examples,
+                    shard_num_features) in shards_iter:
         all_results = []
-        model.eval()
-        with torch.no_grad():
-            outputs = model(
-                is_training = False,
-                input_ids=batch["input_ids"].long().to(DEVICE),
-                attention_mask=batch['input_mask'].long().to(DEVICE),
-                token_type_ids=batch['segment_ids'].long().to(DEVICE),
-            )
+        total_num_examples += shard_num_examples
+        logging.info(
+            "Shard %d: Running prediction for %s; %d examples, %d features.",
+            shard_num, shard_filename, shard_num_examples, shard_num_features
+        )
+        print(shard_filename)
+        #use tfrecord_dataset to read tfrecord into dataset for pytorch
+        eval_dataset = TFRecordDataset(shard_filename, index_path = None)
+        eval_dataloader = DataLoader(eval_dataset, batch_size=args.predict_batch_size, shuffle=False)
 
-            for num, (i, j, k) in enumerate(zip(outputs[0], outputs[1], outputs[2])):
-                unique_ids = int(batch['unique_ids'][num])
-                start_logits = [float(x) for x in i]
-                end_logits = [float(x) for x in j]
-                answer_type_logits = [float(x) for x in k]
-                all_results.append(
-                    RawResult(
-                        unique_id=unique_ids,
-                        start_logits=start_logits,
-                        end_logits=end_logits,
-                        answer_type_logits=answer_type_logits
-                    )
+        for step, batch in enumerate(eval_dataloader):
+            #Turn on model evaluation mode, and set frame to no_grad
+            model.eval()
+            with torch.no_grad():
+                outputs = model(
+                    is_training=False,
+                    input_ids=batch["input_ids"].long().to(DEVICE),
+                    attention_mask=batch['input_mask'].long().to(DEVICE),
+                    token_type_ids=batch['segment_ids'].long().to(DEVICE),
                 )
+                #print(torch.max(outputs[0], -1))
+                #write results into RawResult format for post-process
+                for num, (i, j, k) in enumerate(zip(outputs[0], outputs[1], outputs[2])):
+                    unique_ids = int(batch['unique_ids'][num])
+                    start_logits = [float(x) for x in i]
+                    end_logits = [float(x) for x in j]
+                    answer_type_logits = [float(x) for x in k]
+                    all_results.append(
+                        RawResult(
+                            unique_id=unique_ids,
+                            start_logits=start_logits,
+                            end_logits=end_logits,
+                            answer_type_logits=answer_type_logits
+                        )
+                    )
+            print('We at step %d of shard % d', step, shard_filename)
 
-                #if len(all_results) % 1000 == 0:
-                    #logging.info("Predicting %d of samples", len(all_results))
+        predict_features = [
+            tf.train.Example.FromString(r)
+            for r in tf.python_io.tf_record_iterator(shard_filename)
+        ]
 
-            predict_features = [tf.train.Example.FromString(r)
-                                for r in tf.python_io.tf_record_iterator(args.precomputed_predict_file)]
+        logging.info("Shard %d: Post-processing predictions.", shard_num)
+        logging.info("  Num candidate examples loaded (includes all shards): %d",
+                     len(candidates_dict))
+        logging.info("  Num candidate features loaded: %d", len(predict_features))
+        logging.info("  Num prediction result features: %d", len(all_results))
+        logging.info("  Num shard features: %d", shard_num_features)
 
-            candidates_dict = read_candidates(args.predict_file)
-            #start predicting using postproc
-            predict_results = postproc.compute_pred_dict(candidates_dict=candidates_dict,
-                                                dev_features=predict_features,
-                                                raw_results=[r._asdict() for r in all_results],
-                                                candidate_beam=args.candidate_beam)
+        #pass candidates dict, raw results and features to postproc for later use
+        tydi_pred_dict = postproc.compute_pred_dict(
+            candidates_dict,
+            predict_features, [r._asdict() for r in all_results],
+            candidate_beam=args.candidate_beam)
 
-            logging.info("  Num post-processed results: %d", len(predict_results))
-            for key, value in predict_results.items():
-                if key in full_tydi_pred_dict:
-                    logging.warning("ERROR: '%s' already in full_tydi_pred_dict!", key)
-                full_tydi_pred_dict[key] = value
+        logging.info("Shard %d: Post-processed predictions.", shard_num)
+        logging.info("  Num shard examples: %d", shard_num_examples)
+        logging.info("  Num post-processed results: %d", len(tydi_pred_dict))
+        if shard_num_examples != len(tydi_pred_dict):
+            logging.warning("  Num missing predictions: %d",
+                            shard_num_examples - len(tydi_pred_dict))
+        for key, value in tydi_pred_dict.items():
+            if key in full_tydi_pred_dict:
+                logging.warning("ERROR: '%s' already in full_tydi_pred_dict!", key)
+            full_tydi_pred_dict[key] = value
+        #break
+    #Finish up predictions for all shards and start logging
+    logging.info("Prediction finished for all shards.")
+    logging.info("  Total input examples: %d", total_num_examples)
+    logging.info("  Total output predictions: %d", len(full_tydi_pred_dict))
 
-            logging.info("  Total output predictions: %d", len(full_tydi_pred_dict))
-
-        with tf.gfile.Open(args.output_prediction_file, "w") as output_file:
-            for prediction in full_tydi_pred_dict.values():
-                output_file.write((json.dumps(prediction) + "\n").encode())
+    with tf.gfile.Open(args.output_prediction_file, "w") as output_file:
+        for prediction in full_tydi_pred_dict.values():
+            output_file.write((json.dumps(prediction) + "\n").encode())
 
 
 if __name__ == "__main__":
@@ -219,7 +273,7 @@ if __name__ == "__main__":
         "--train_records_file",
         default=None,
         type=str,
-        required=True,
+        required=False,
         help="Precomputed tf records for training."
 
     )
@@ -325,7 +379,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_batch_size",
-        default=16,
+        default=8,
         type=int,
         required=False,
         help="Whether to run prediction."
@@ -333,7 +387,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--predict_batch_size",
-        default=16,
+        default=36,
         type=int,
         required=False,
         help="Total batch size for predictions."
@@ -471,17 +525,18 @@ if __name__ == "__main__":
 
     parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay if we apply some.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
-    parser.add_argument("--save_steps", type=int, default=50, help="Save checkpoint every X updates steps.")
+    parser.add_argument("--save_steps", type=int, default=50000, help="Save checkpoint every X updates steps.")
     parser.add_argument("--logging_steps", type=int, default=10, help="Log every X updates steps.")
+    parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
+    parser.add_argument("--grad_acc_steps", default=2, type=int, help="Gradient accumulation steps")
     args = parser.parse_args()
-
-    if args.do_train:
+    '''if args.do_train:
         model = TYDIQA.from_pretrained(args.init_checkpoint)
         model.to(DEVICE)
         train_dataset = torch.load(args.train_records_file)['dataset']
         train(args, train_dataset, model)
-        logging.info("Finish Finetuning")
-    if args.do_predidct:
+        logging.info("Finish Finetuning")'''
+    if args.do_predict:
         model = TYDIQA.from_pretrained(args.pretrained_weights)
         model.to(DEVICE)
         predict(args, model)
